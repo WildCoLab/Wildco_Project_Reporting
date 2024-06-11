@@ -1,0 +1,114 @@
+---
+title: "Generate-Report.Rmd"
+author: "Liam Brennan"
+date: "2024-06-04"
+output: html_document
+---
+
+```{r - script info}
+## Script and R project prepared by: Liam Brennan, with major contributions from
+# other Wildco lab members: Chris Beirne, Katie Tjaden-McClement, Madeleine Wrazej,
+# Mitch Fennell, Zoe Konanz,Cole Burton and others)
+
+## Last Updated June 2024
+
+# This Generate_Report.Rmd script calls "Wildco_Project_Reporting.Rmd", which then calls the
+# remaining Rmd files in this project and generates a word document containing key
+# summary figures. Generally, this script will directly handle data from
+# the Wildco database and perform general data standardization, site
+# exploration, and output useful data sets, figures, html documents, and the final
+# word document. Before running this code you must authenticate an API key for Google maps in
+# the Maps.Rmd. This workflow assumes you have followed the Timelapse Operational Period Tagging
+# Protocol for Wildco Lab projects.
+
+# See https://docs.google.com/document/d/1rIX-EWLpLsJrgyM6DEL76m3IRhA0OGPhiF1qg59C7Lo/edit for more info.
+
+# Please direct questions to cole.burton@ubc.ca
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# clean variables
+rm()
+```
+
+```{r}
+# Load Packages
+list.of.packages <- c("rmarkdown")
+
+# Check you have them and load them
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
+if (length(new.packages)) install.packages(new.packages)
+lapply(list.of.packages, require, character.only = TRUE)
+```
+
+```{r generate a Word Doc}
+# Define the list of project name(s) -- you can loop through one project or multiple.
+
+#######################
+proj_names <- c("BLT") # , "BLT", "MK",CATH", "GARI", "GE", "JOFF", "M2M", "MG", "MK", "SC", "ITCHA")
+#######################
+
+# Define the independence threshold
+#######################
+independence_threshold <- 30
+#######################
+
+# Timezone [Use UTC if your cameras do not correct for daylight saving time, if they do use the timezone where the data was collected]
+tz <- "UTC"
+
+# Set a single categorical variable of interest from station covariates for summary graphs. If you do not have an appropriate category use "Project.ID".
+category <- "Treatment" # Typical WildCo options: Feature.Type  Bait.Type
+
+# Define a colour from the R options to base the colourscheme
+colour <- "lightseagreen"
+
+# Do you want to output an additional dataframe with independent events broken down by sex and age groups?
+ind_sex_age_output <- TRUE
+
+# Do you want to create additional summary plots excluding human data?
+plot_without_humans <- TRUE
+
+################################################################################
+# Change the variables below only if you are generating a report for a single
+# project. The following variables will be used to update figure caption info.
+
+########################
+project_title <- "Insert Project Name Here"
+########################
+
+########################
+date_range <- "20XX-20XX"
+########################
+
+################################################################################
+# create new folder
+dir.create("word_files/", showWarnings = FALSE)
+
+# Loop through each project name
+for (proj_name in proj_names) {
+  # Create a subdirectory for each project if it doesn't exist
+  dir.create(paste0("word_files/", proj_name), showWarnings = FALSE)
+
+  # Define the output file name for each project
+  output_file <- paste0("word_files/", proj_name, "/", proj_name, "_Standard_Report.docx")
+
+  # Render the R Markdown document for each project
+  render(
+    input = "Wildco_Project_Reporting.Rmd",
+    output_file = output_file,
+    output_format = "word_document",
+    params = list(
+      project = proj_name,
+      independence_threshold = independence_threshold,
+      project_title = project_title,
+      date_range = date_range,
+      tz = tz,
+      category = category,
+      colour = colour,
+      ind_sex_age_output = ind_sex_age_output,
+      plot_without_humans = plot_without_humans
+    )
+  )
+}
+```

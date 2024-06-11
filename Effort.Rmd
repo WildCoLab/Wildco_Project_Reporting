@@ -1,0 +1,413 @@
+---
+title: "Effort.Rmd"
+author: "Liam Brennan"
+date: "2024-03-01"
+output: html_document
+params:
+  proj_name: "Default Project"
+---
+
+```{r eff_set_up}
+knitr::opts_chunk$set(echo = FALSE, results = FALSE)
+```
+
+```{r snow coverage and camera effort}
+##### SNOW COVERAGE/VIEW OBSTRUCTED AND CAMERA EFFORT#####
+## This script was prepared to calculate camera effort and help assess how much time the camera was covered while it was deployed (eg. cam was covered with snow or the view was fully obstructed).
+## Prepared by: Madeleine Wrazej and Liam Brennan
+## Last modified: 2024-05-08
+
+# Load Packages
+list.of.packages <- c("leaflet", "dplyr", "viridis", "kriging", "lubridate", "kableExtra", "tidyverse", "ggplot2")
+
+# Check you have them and load them
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
+if (length(new.packages)) install.packages(new.packages)
+lapply(list.of.packages, require, character.only = TRUE)
+
+# Set project name
+proj_name <- params$proj_name
+
+## call up original image_idents data
+tmp.dat <- read.csv(paste0("raw_data/", proj_name, "/images.csv"))
+
+# Create a new data frame with specific columns
+tmp.dat <- tmp.dat %>%
+  select(station_id, orig_file, timestamp_pst, image_trigger, misfire) %>%
+  rename(
+    Deployment.Location.ID = station_id,
+    Image.ID = orig_file,
+    Date_Time.Captured = timestamp_pst,
+    Image_Trigger = image_trigger,
+    Blank = misfire
+  )
+
+# ensure date format is correct
+ymd_hms(tmp.dat$Date_Time.Captured[1], truncated = 2)
+
+# show all days when cam non-functional using timelapse images  - this should be when timelapse is a misfire
+# Extract rows where image_trigger is "Timelapse"
+tl.data <- tmp.dat %>%
+  filter(Image_Trigger == "Time Lapse")
+
+# Count the number of times misfire = "t"
+misfire_count <- sum(tl.data$Blank == "t")
+
+snow_cov <- tl.data %>%
+  filter(Blank == "t")
+
+if (!nrow(snow_cov) == 0) {
+  # Convert 'Date_Time.Captured' to datetime format
+  snow_cov$Date_Time.Captured <- as.POSIXct(snow_cov$Date_Time.Captured, format = "%Y-%m-%d %H:%M:%S")
+
+  # Sort the data by Location ID and Date
+  snow_cov <- snow_cov %>%
+    arrange(`Deployment.Location.ID`, `Date_Time.Captured`)
+
+  # Define a function to check consecutive days
+  get_consecutive_dates <- function(date_vector) {
+    # Calculate the difference between consecutive dates
+    diff_dates <- c(0, diff(date_vector))
+
+    # Identify transitions from non-consecutive to consecutive dates
+    start_indices <- which(diff_dates != 1)
+    end_indices <- c(start_indices - 1, length(date_vector))
+
+    # Extract start and end dates
+    Camera.Deployment.Begin.Dates <- date_vector[start_indices]
+    Camera.Deployment.End.Dates <- date_vector[end_indices]
+
+    return(tibble(Snow.cov_Camera.Deployment.Begin.Date = Camera.Deployment.Begin.Dates, Snow.cov_Camera.Deployment.End.Date = Camera.Deployment.End.Dates))
+  }
+
+  # Group by Location ID and apply the function
+  snow_cov <- snow_cov %>%
+    group_by(`Deployment.Location.ID`) %>%
+    summarise(Start_Camera.Deployment.End.Dates = list(get_consecutive_dates(`Date_Time.Captured`))) %>%
+    unnest(cols = c(Start_Camera.Deployment.End.Dates))
+
+  # Assuming snow_cov is your data frame
+  snow_cov <- snow_cov %>%
+    mutate(
+      Snow.cov_Camera.Deployment.Begin.Date = as.Date(Snow.cov_Camera.Deployment.Begin.Date),
+      Snow.cov_Camera.Deployment.End.Date = as.Date(Snow.cov_Camera.Deployment.End.Date)
+    ) %>%
+    group_by(Deployment.Location.ID) %>%
+    mutate(Date_Group = cumsum(c(1, diff(Snow.cov_Camera.Deployment.Begin.Date) != 1))) %>%
+    group_by(Deployment.Location.ID, Date_Group) %>%
+    summarise(Snow.cov_Camera.Deployment.Begin.Date = min(Snow.cov_Camera.Deployment.Begin.Date), Snow.cov_Camera.Deployment.End.Date = max(Snow.cov_Camera.Deployment.End.Date)) %>%
+    ungroup() %>%
+    select(Deployment.Location.ID, Snow.cov_Camera.Deployment.Begin.Date, Snow.cov_Camera.Deployment.End.Date) %>%
+    distinct()
+
+  # Print the result
+  print(snow_cov)
+
+  # Assuming snow_cov is your data frame
+  snow_cov$Snow.cov_Camera.Deployment.Begin.Date <- as.Date(snow_cov$Snow.cov_Camera.Deployment.Begin.Date)
+  snow_cov$Snow.cov_Camera.Deployment.End.Date <- as.Date(snow_cov$Snow.cov_Camera.Deployment.End.Date)
+
+
+  # Print the result
+  print(snow_cov)
+
+  # Assuming snow_cov is your data frame and Camera.Deployment.Begin.Date/Camera.Deployment.End.Date are in date format
+  ggplot(snow_cov, aes(x = Snow.cov_Camera.Deployment.Begin.Date, y = Deployment.Location.ID)) +
+    geom_segment(aes(xend = Snow.cov_Camera.Deployment.End.Date, yend = Deployment.Location.ID), color = "blue", size = 1) +
+    geom_point(aes(color = Deployment.Location.ID), size = 2) +
+    scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+    labs(x = "Month-Year", y = "Deployment.Location.ID", title = "Snow Coverage") +
+    theme_minimal() +
+    theme(legend.position = "none")
+
+
+  # this creates a csv file showing all of the days that a camera was snow covered
+  colnames(snow_cov) <- c("Deployment.Location.ID", "Camera.Deployment.Begin.Date", "Camera.Deployment.End.Date")
+  # write.csv(snow_cov, "processed_data/snow_coverage.csv")
+} else {
+  cat("No data for snow coverage.")
+}
+
+###### Determining Camera Effort from Timelapse Images#####
+cam_eff <- tl.data %>%
+  filter(Blank == "f")
+
+# Convert 'Date_Time.Captured' to datetime format
+cam_eff$Date_Time.Captured <- as.POSIXct(cam_eff$Date_Time.Captured, format = "%Y-%m-%d %H:%M:%S")
+
+# Sort the data by Location ID and Date
+cam_eff <- cam_eff %>%
+  arrange(`Deployment.Location.ID`, `Date_Time.Captured`)
+
+# Define a function to check consecutive days
+get_consecutive_dates <- function(date_vector) {
+  # Calculate the difference between consecutive dates
+  diff_dates <- c(0, diff(date_vector))
+
+  # Identify transitions from non-consecutive to consecutive dates
+  start_indices <- which(diff_dates != 1)
+  end_indices <- c(start_indices - 1, length(date_vector))
+
+  # Extract start and end dates
+  Camera.Deployment.Begin.Dates <- date_vector[start_indices]
+  Camera.Deployment.End.Dates <- date_vector[end_indices]
+
+  return(tibble(Camera.Deployment.Begin.Date = Camera.Deployment.Begin.Dates, Camera.Deployment.End.Date = Camera.Deployment.End.Dates))
+}
+
+# Group by Location ID and apply the function
+cam_eff <- cam_eff %>%
+  group_by(`Deployment.Location.ID`) %>%
+  summarise(Start_Camera.Deployment.End.Dates = list(get_consecutive_dates(`Date_Time.Captured`))) %>%
+  unnest(cols = c(Start_Camera.Deployment.End.Dates))
+
+# Assuming cam eff is your data frame
+cam_eff <- cam_eff %>%
+  mutate(
+    Camera.Deployment.Begin.Date = as.Date(Camera.Deployment.Begin.Date),
+    Camera.Deployment.End.Date = as.Date(Camera.Deployment.End.Date)
+  ) %>%
+  group_by(Deployment.Location.ID) %>%
+  mutate(Date_Group = cumsum(c(1, diff(Camera.Deployment.Begin.Date) != 1))) %>%
+  group_by(Deployment.Location.ID, Date_Group) %>%
+  summarise(Camera.Deployment.Begin.Date = min(Camera.Deployment.Begin.Date), Camera.Deployment.End.Date = max(Camera.Deployment.End.Date)) %>%
+  ungroup() %>%
+  select(Deployment.Location.ID, Camera.Deployment.Begin.Date, Camera.Deployment.End.Date) %>%
+  distinct()
+
+# Print the result
+print(cam_eff)
+
+# Assuming snow_cov is your data frame
+cam_eff$Camera.Deployment.Begin.Date <- as.Date(cam_eff$Camera.Deployment.Begin.Date)
+cam_eff$Camera.Deployment.End.Date <- as.Date(cam_eff$Camera.Deployment.End.Date)
+
+
+# Print the result
+print(cam_eff)
+
+
+# Assuming snow_cov is your data frame and Camera.Deployment.Begin.Date/Camera.Deployment.End.Date are in date format
+ggplot(cam_eff, aes(x = Camera.Deployment.Begin.Date, y = Deployment.Location.ID)) +
+  geom_segment(aes(xend = Camera.Deployment.End.Date, yend = Deployment.Location.ID), color = "blue", size = 1) +
+  geom_point(aes(color = Deployment.Location.ID), size = 2) +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(x = "Month-Year", y = "Deployment.Location.ID", title = "Camera Effort") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+eff <- cam_eff
+
+# this produced the eff file that can be used for camera effort
+# write.csv(eff, "raw_data/eff.csv")
+```
+
+```{r eff_TL}
+tl.data <- tmp.dat %>%
+  filter(Image_Trigger == "Time Lapse")
+
+# Convert 'Date_Time.Captured' to datetime format
+tl.data$Date_Time.Captured <- as.POSIXct(tl.data$Date_Time.Captured, format = "%Y-%m-%d %H:%M:%S")
+
+# Sort the data by Location ID and Date
+tl.data <- tl.data %>%
+  arrange(`Deployment.Location.ID`, `Date_Time.Captured`)
+
+# Define a function to check consecutive days
+get_consecutive_dates <- function(date_vector) {
+  # Calculate the difference between consecutive dates
+  diff_dates <- c(0, diff(date_vector))
+
+  # Identify transitions from non-consecutive to consecutive dates
+  start_indices <- which(diff_dates != 1)
+  end_indices <- c(start_indices - 1, length(date_vector))
+
+  # Extract start and end dates
+  Camera.Deployment.Begin.Dates <- date_vector[start_indices]
+  Camera.Deployment.End.Dates <- date_vector[end_indices]
+
+  return(tibble(Camera.Deployment.Begin.Date = Camera.Deployment.Begin.Dates, Camera.Deployment.End.Date = Camera.Deployment.End.Dates))
+}
+
+# Group by Location ID and apply the function
+tl.data <- tl.data %>%
+  group_by(`Deployment.Location.ID`) %>%
+  summarise(Start_Camera.Deployment.End.Dates = list(get_consecutive_dates(`Date_Time.Captured`))) %>%
+  unnest(cols = c(Start_Camera.Deployment.End.Dates))
+
+# Assuming tl.data is your data frame
+tl.data <- tl.data %>%
+  mutate(
+    Camera.Deployment.Begin.Date = as.Date(Camera.Deployment.Begin.Date),
+    Camera.Deployment.End.Date = as.Date(Camera.Deployment.End.Date)
+  ) %>%
+  group_by(Deployment.Location.ID) %>%
+  mutate(Date_Group = cumsum(c(1, diff(Camera.Deployment.Begin.Date) != 1))) %>%
+  group_by(Deployment.Location.ID, Date_Group) %>%
+  summarise(Camera.Deployment.Begin.Date = min(Camera.Deployment.Begin.Date), Camera.Deployment.End.Date = max(Camera.Deployment.End.Date)) %>%
+  ungroup() %>%
+  select(Deployment.Location.ID, Camera.Deployment.Begin.Date, Camera.Deployment.End.Date) %>%
+  distinct()
+
+# Print the result
+print(tl.data)
+```
+
+
+```{r eff_md}
+#########################################################################################################################
+# if Timelapse fails / staff fail to set it properly, at certain sites this code will add "missing effort" by scanning through periods of time with no timelapse and checking if motion detection occurred during this time. If Motion detection images are found, an effort vector will be added to the effort data frame by selecting the period of time between the first and last detection in this "no time lapse period". Important assumption here is that IF your time lapse fails, and you suspect your camera may have been covered in snow/obstructed you will have to manually change the effort based on your best guess / other cameras in the area. Use the graph below to guide you decision making!
+########################################################################################################################
+
+# Function to find operational periods
+find_operational_periods <- function(data) {
+  # Combine start and end dates for all deployments
+  all_dates <- sort(c(data$Camera.Deployment.Begin.Date, data$Camera.Deployment.End.Date))
+
+  # Create a data frame to store operational periods
+  op_periods <- data.frame(
+    Camera.Deployment.Begin.Date = all_dates[-length(all_dates)], # Exclude the last date
+    Camera.Deployment.End.Date = all_dates[-1] # Exclude the first date
+  )
+
+  # Filter out non-operational periods
+  op_periods <- op_periods[!duplicated(op_periods) & !duplicated(op_periods, fromLast = TRUE), ]
+
+  return(op_periods)
+}
+
+# Find operational periods for each location
+operational_periods <- tl.data %>%
+  group_by(Deployment.Location.ID) %>%
+  group_modify(~ find_operational_periods(.x))
+
+op_periods_noTL <- anti_join(operational_periods, tl.data)
+
+# Output the operational periods grouped by Location ID
+print(op_periods_noTL)
+```
+
+
+```{r eff_md_loop}
+# nested for/if loop - Takes about 10 mins to run get first and last MD period during noTL period
+
+if (!nrow(op_periods_noTL) == 0) {
+  md.data <- tmp.dat %>%
+    filter(Image_Trigger == "Motion Detection")
+
+  # Convert 'Date_Time.Captured' to datetime format
+  md.data$Date_Time.Captured <- as.POSIXct(md.data$Date_Time.Captured, format = "%Y-%m-%d %H:%M:%S")
+  op_periods_noTL$Camera.Deployment.Begin.Date <- as.POSIXct(op_periods_noTL$Camera.Deployment.Begin.Date, format = "%Y-%m-%d %H:%M:%S")
+  op_periods_noTL$Camera.Deployment.End.Date <- as.POSIXct(op_periods_noTL$Camera.Deployment.End.Date, format = "%Y-%m-%d %H:%M:%S")
+
+  # Create an empty data frame to store the results
+  eff_MD <- data.frame(
+    Location = character(),
+    Begin_Date_Time = as.POSIXct(character()),
+    End_Date_Time = as.POSIXct(character()),
+    stringsAsFactors = FALSE
+  )
+
+  # Iterate through each row in op_periods_noTL
+  for (i in 1:nrow(op_periods_noTL)) {
+    location <- op_periods_noTL$Deployment.Location.ID[i]
+    begin_date <- op_periods_noTL$Camera.Deployment.Begin.Date[i]
+    end_date <- op_periods_noTL$Camera.Deployment.End.Date[i]
+
+    # Initialize variables to store earliest and latest date time
+    earliest_datetime <- NA
+    latest_datetime <- NA
+
+    # Iterate through each row in md.data
+    for (j in 1:nrow(md.data)) {
+      if (md.data$Deployment.Location.ID[j] == location &&
+        md.data$Date_Time.Captured[j] >= begin_date &&
+        md.data$Date_Time.Captured[j] <= end_date) {
+        # Update earliest and latest date time
+        if (is.na(earliest_datetime)) {
+          earliest_datetime <- md.data$Date_Time.Captured[j]
+        } else if (md.data$Date_Time.Captured[j] < earliest_datetime) {
+          earliest_datetime <- md.data$Date_Time.Captured[j]
+        }
+
+        if (is.na(latest_datetime)) {
+          latest_datetime <- md.data$Date_Time.Captured[j]
+        } else if (md.data$Date_Time.Captured[j] > latest_datetime) {
+          latest_datetime <- md.data$Date_Time.Captured[j]
+        }
+      }
+    }
+
+    # Append results to eff_MD
+    eff_MD <- rbind(eff_MD, data.frame(
+      Deployment.Location.ID = location,
+      Camera.Deployment.Begin.Date = earliest_datetime,
+      Camera.Deployment.End.Date = latest_datetime
+    ))
+  }
+
+  # Print the summary data frame
+  print(eff_MD)
+} else {
+  cat("No data for period of time with No TL")
+
+  eff_MD <- data.frame(
+    Location = character(),
+    Begin_Date_Time = as.POSIXct(character()),
+    End_Date_Time = as.POSIXct(character()),
+    stringsAsFactors = FALSE
+  )
+}
+```
+
+
+```{r eff_plot}
+# BRINGING IT ALL TOGETHER in a plot
+
+snow_cov <- snow_cov %>% mutate(Effort_Type = "Snow Covered / Obstructed")
+eff_TL <- eff %>% mutate(Effort_Type = "Effort from Timelapse")
+eff_MD <- eff_MD %>% mutate(Effort_Type = "Effort from Motion Detection (No TL)")
+
+eff_to_plot <- rbind(snow_cov, eff_TL, eff_MD)
+
+# Convert Effort_Type to factor with custom levels
+eff_to_plot$Effort_Type <- factor(eff_to_plot$Effort_Type, levels = c("Effort from Timelapse", "Effort from Motion Detection (No TL)", "Snow Covered / Obstructed"))
+
+# Define custom colors for each Effort_Type
+effort_colors <- c("Snow Covered / Obstructed" = "#56B4E9", "Effort from Timelapse" = "#009E73", "Effort from Motion Detection (No TL)" = "#E69F00")
+
+# Plot
+p <- ggplot(eff_to_plot, aes(x = Camera.Deployment.Begin.Date, y = Deployment.Location.ID)) +
+  geom_segment(aes(xend = Camera.Deployment.End.Date, yend = Deployment.Location.ID, colour = Effort_Type), size = 2) +
+  geom_point(aes(color = "Points"), size = 1) + # Add black dots for start/end dates
+  labs(x = "Year", y = "Camera") +
+  scale_color_manual(
+    name = "Legend",
+    values = c(
+      "black" = "black",
+      "Snow Covered / Obstructed" = "#56B4E9",
+      "Effort from Motion Detection (No TL)" = "#E69F00",
+      "Effort from Timelapse" = "#009E73",
+      "Points" = "black"
+    ), # Map "Points" to black color
+    labels = c("Effort from Timelapse", "Effort from Motion Detection", "Snow Covered / Obstructed", "Deployment Start / End dates", "Points")
+  ) +
+  guides(color = guide_legend(override.aes = list(shape = c(16)), title = "Legend")) + # Combine legend for both points and Effort_Type
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = "white", color = "white"))
+
+ggsave(paste0("figures/", proj_name, "/Effort_Plot.png"), plot = p, width = 12, height = 6)
+
+p
+```
+
+
+```{r eff_export}
+final_eff <- eff_to_plot %>%
+  filter(Effort_Type != "Snow Covered / Obstructed") %>%
+  filter(!is.na(Camera.Deployment.Begin.Date)) %>%
+  filter(!is.na(Camera.Deployment.End.Date))
+
+print(final_eff)
+write.csv(final_eff, paste0("raw_data/", proj_name, "/eff.csv"))
+```

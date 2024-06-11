@@ -1,0 +1,173 @@
+---
+title: 'Time_Series.Rmd'
+author: "Liam Brennan"
+date: "2024-03-13"
+output: html_document
+params:
+  proj_name: "Default Project"
+  threshold: "Default Threshold"
+---
+
+```{r time_series_setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, results = FALSE)
+```
+
+
+```{r time_series_library}
+library(tidyverse)
+library(lubridate)
+library(hrbrthemes)
+library(cowplot)
+library(stringr)
+```
+
+
+```{r time_series_intialize}
+# Set project name
+proj_name <- params$proj_name
+
+# Set the "independence" interval in minutes
+independent <- params$threshold
+
+ind.dat <- read.csv(paste0("processed_data/", proj_name, "/", proj_name, "_", independent, "min_Independent.csv"))
+ind.dat$Species <- gsub(" ", ".", ind.dat$Species)
+row.lookup <- read.csv(paste0("processed_data/", proj_name, "/", proj_name, "_daily_effort_lookup.csv"))
+```
+
+```{r time_series_detections}
+## Site-level temporal plots
+
+### Summary
+# Across all sites and species:
+
+# Capture rates through time
+focal.sp <- as.character(unique(ind.dat$Species))
+focal.sp <- focal.sp[order(focal.sp)]
+# Remove any blanks
+focal.sp <- focal.sp[focal.sp != ""]
+# Remove Spaces in Sp. Names
+focal.sp <- gsub(" ", ".", focal.sp)
+
+# Now determine capture rates using the row.lookup
+# Make a data frame by month and year
+mon.dat <- unique(substr(ind.dat$Date_Time.Captured, 1, 7))
+mon.dat <- data.frame("Month" = mon.dat[order(mon.dat)], "Effort" = NA)
+mon.dat[as.character(focal.sp)] <- NA
+
+mon.dat
+i <- 1
+for (i in 1:nrow(mon.dat))
+{
+  mon.dat$Effort[i] <- nrow(subset(row.lookup, substr(row.lookup$Date, 1, 7) == mon.dat$Month[i]))
+  mon.dat$Total.CR[i] <- (nrow(subset(ind.dat, substr(ind.dat$Date_Time.Captured, 1, 7) == mon.dat$Month[i])) / mon.dat$Effort[i]) * 100
+}
+
+for (i in 1:length(focal.sp))
+{
+  for (j in 1:nrow(mon.dat))
+  {
+    tmp <- subset(ind.dat, Species == as.character(focal.sp)[i] & substr(ind.dat$Date_Time.Captured, 1, 7) == mon.dat$Month[j])
+    mon.dat[j, as.character(focal.sp[i])] <- (nrow(tmp) / mon.dat$Effort[j]) * 100
+  }
+}
+
+mon.dat$timestamp <- strptime(paste0(as.character(mon.dat$Month), "-15"), "%Y-%m-%d")
+
+# Remove any silly values
+mon.dat <- mon.dat[is.infinite(mon.dat$Total.CR) == F, ]
+```
+
+
+```{r time_series_filter}
+# Filter for more common species of interest (i.e., those that achieve a max CR/100 days > 1)
+
+names(mon.dat) <- str_replace_all(names(mon.dat), c(" " = "."))
+
+common.sp <- mon.dat %>%
+  # remove any of the common species you don't want to plot
+  mutate(Bird.spp. = NULL, Unknown.species = NULL, Tamiasciurus.douglasii = NULL, Procyon.lotor = NULL, Canis.familiaris = NULL, Unknown.small.mammal = NULL, Felis.catus = NULL) %>%
+  select(any_of(focal.sp)) %>%
+  summarise_all(mean)
+
+
+common.sp <- as.data.frame(t(common.sp))
+colnames(common.sp) <- "Detection.Rate.CR.100.days"
+common.sp$Species <- rownames(common.sp)
+rownames(common.sp) <- NULL
+
+common.sp <- common.sp[order(-common.sp$Detection.Rate.CR.100.days), ]
+
+# Select the top 7 species with the greatest detection rates
+common.sp <- head(common.sp, 7)
+common.sp <- as.character(common.sp$Species)
+
+mon.dat.toplot <- mon.dat %>%
+  select(any_of(common.sp)) %>%
+  mutate(Timestamp = mon.dat$timestamp)
+```
+
+
+```{r time_series_adjust_anmes}
+# have a look at common.sp and re-arrange in the order you would like for them to be plotted (optional)
+
+sp.vec <- gsub(".", " ", common.sp, fixed = TRUE)
+sp.vec.nospace <- gsub(" ", ".", sp.vec)
+```
+
+```{r time_series_plot}
+# Make a nice time series plot with a for loop
+
+Alpha <- c(
+  "a)", "b)", "c)", "d)", "e)", "f)", "g)", "h)", "i)", "j)", "k)", "l)", "m)",
+  "n)", "o)", "p)", "q)", "r)", "s)", "t)", "u)", "v)", "w)", "x)", "y)", "z)"
+)
+p <- list()
+silhoutte_df <- list()
+sp.vec.nospace <- gsub(" ", ".", sp.vec)
+
+for (i in 1:length(sp.vec.nospace)) {
+  p[[i]] <- ggplot(mon.dat.toplot, aes(x = as.Date(Timestamp), y = !!sym(sp.vec.nospace[i]))) +
+    geom_bar(stat = "identity", width = 25.0) +
+    xlab("Year") +
+    ylab("Detection Rate") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.line = element_line(colour = "black")
+    ) +
+    scale_x_date(
+      limit = c(as.Date(paste0(min(mon.dat.toplot$Timestamp) %m-% months(1))), as.Date(paste0(max(mon.dat.toplot$Timestamp) %m+% months(1)))),
+      date_breaks = "1 year", date_labels = "%Y"
+    ) +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme(axis.title = element_text(size = 10)) +
+    ggtitle(paste0(Alpha[[i]], " ", gsub(".", " ", sp.vec.nospace[i], fixed = TRUE)))
+}
+
+################################################################################ Final Plot grid below
+plot_grid(plotlist = p, ncol = 1, align = "v")
+
+# Saves plots of specific size in assigned place
+ggsave(paste0("figures/", proj_name, "/Timeseries_Plot_Common_Sp.png"), height = 10, width = 8, unit = "in", bg = "white")
+```
+
+
+
+Extra code to play around with 
+
+Use Rphylopic package to obtain images for your species you wish to plot - it will take some trial and error inputting numbers 1-5 to select which silhouette you would like to use. You must put input values into the console for this chunk to run.
+
+#1,3,1,4,2,1,2
+
+sp <- list()
+
+for (i in 1:length(sp.vec)) {
+  
+  print(paste0(sp.vec[i]))
+  
+  sp[[i]] <- pick_phylopic(name = paste0(sp.vec[i]), view = 5)
+  
+  save_phylopic(img = sp[[i]], path = paste0("Images/",sp.vec.nospace[[i]],"img.png"), width = 500, height = 500)
+  
+}

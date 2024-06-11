@@ -1,0 +1,30 @@
+---
+title: "Common_Name_Detections_Table"
+author: "Liam Brennan"
+date: "2024-04-10"
+output: html_document
+params:
+  proj_name: "Default Project"
+---
+
+```{r detections_table_set_up}
+knitr::opts_chunk$set(echo = FALSE, results = FALSE)
+```
+
+```{r detections_table}
+proj_name <- params$proj_name
+
+library(dplyr)
+
+sp.dect <- read.csv(paste0("processed_data/", proj_name, "/", proj_name, "_30min_Independent.csv"))
+
+dect_summ <- sp.dect %>%
+  group_by(Species.Common.Name, Species) %>%
+  summarise(Total_Detections = n())
+
+dect_summ$Species.Common.Name[dect_summ$Species == "Bird spp."] <- "Bird species"
+dect_summ$Species.Common.Name[dect_summ$Species == "Unknown species"] <- "Unknown species"
+colnames(dect_summ) <- c("Common Name", "Latin Name", "Total Detections")
+
+write.csv(dect_summ, paste0("processed_data/", proj_name, "/", proj_name, "_Common_Name_Detection_Table.csv"))
+```

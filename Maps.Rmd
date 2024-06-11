@@ -1,0 +1,289 @@
+---
+title: "Maps"
+author: "Liam Brennan"
+date: "2024-03-13"
+output: html_document
+params:
+  proj_name: "Default Project"
+  threshold: "Default Threshold"
+---
+
+```{r maps_set_up}
+knitr::opts_chunk$set(echo = FALSE, results = FALSE)
+```
+
+```{r map_initialize}
+### Maps
+### Jan 2024
+
+library(tidyverse)
+library(ggmap)
+library(sf)
+library(bcmaps)
+library(terra)
+library(osmdata)
+library(ggspatial)
+library(cowplot)
+library(raster)
+library(tidyterra)
+library(lubridate)
+library(magick)
+library(rphylopic)
+library(rstudioapi)
+
+#####################################################
+# MUST register own personal API Key for code to work
+####################################################
+
+register_google(key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
+# Set project name
+proj_name <- params$proj_name
+
+# Set the "independence" interval in minutes
+independent <- params$threshold
+
+sta <- read.csv(paste0("raw_data/", proj_name, "/stations.csv"), header = T)
+
+mlong <- mean(sta$longitude)
+mlat <- mean(sta$latitude)
+
+# UTM finder function
+lonlat2UTM <- function(lonlat) {
+  utm <- (floor((lonlat[1] + 180) / 6) %% 60) + 1
+  if (lonlat[2] > 0) {
+    utm + 32600
+  } else {
+    utm + 32700
+  }
+}
+
+crs.utm <- lonlat2UTM(c(mlong, mlat))
+
+# Convert stations data to sf object with WGS84 CRS
+sta.wgs <- st_as_sf(sta, coords = c("longitude", "latitude"), crs = 4326)
+
+# Transform the stations data to UTM
+sta.utm <- st_transform(sta.wgs, crs = crs.utm)
+
+# Buffer these points by 18km to create an area of interest (AOI)
+tmp <- st_buffer(sta.utm, dist = 18000)
+
+# Get the bounding box coordinates
+aoi.utm <- st_bbox(tmp)
+aoi.wgs <- st_bbox(st_transform(tmp, crs = 4326))
+
+##### Site Map #####
+# Map background of BC
+mad_map_BC <- get_map(getbb("British Columbia"), maptype = "satellite")
+
+# Map background of the location
+myLocation_cams <- c(aoi.wgs["xmin"], aoi.wgs["ymin"], aoi.wgs["xmax"], aoi.wgs["ymax"])
+
+# Add style elements from Google Maps to make things prettier
+style1 <- c(feature = "all", element = "labels", visibility = "off")
+style2 <- c("&style=", feature = "landscape.natural.landcover", element = "geometry", saturation = "-48")
+style3 <- c("&style=", feature = "landscape.natural.landcover", element = "geometry", lightness = "-15")
+style4 <- c("&style=", feature = "administrative", element = "geometry", visibility = "off")
+style <- c(style1, style2, style3, style4)
+
+mad_map_cams <- get_googlemap(
+  center = c(mlong, mlat), zoom = 11,
+  maptype = "roadmap", scale = 2,
+  style = style
+)
+
+# Get BC outline
+mapBC <- st_as_sf(bcmaps::bc_bound())
+
+# Transform BC boundary to match the stations CRS
+mapBC <- st_transform(mapBC, crs = st_crs(sta.wgs))
+
+# Plot BC boundary to verify
+plot(st_geometry(mapBC))
+
+# Get BC cities and filter for Vancouver
+cities <- bcmaps::bc_cities() %>% filter(NAME %in% c("Vancouver"))
+cities <- st_as_sf(cities)
+
+# Create inset map
+inset <- ggplot() +
+  geom_sf(data = mapBC, fill = "white", colour = "black") +
+  geom_sf(data = st_as_sfc(aoi.utm, crs = st_crs(sta.utm)), color = "red", fill = NA, lwd = 1) +
+  geom_sf(data = cities, colour = "darkblue", size = 0.75) +
+  theme_void()
+
+# Combine main map and inset
+g1_inset <- ggdraw() +
+  draw_plot(inset, x = 0.16, y = 0.09, width = 0.35, height = 0.35)
+
+g1_inset
+
+# ggsave(g1_inset,filename = paste0("figures/", project, "/sta_map.png"),height = 4, width = 6, dpi = 300
+```
+
+
+```{r map_stations_prep}
+# Create the ggmap plot
+
+sta_map <- ggmap(mad_map_cams) +
+  geom_sf(data = sta.wgs, inherit.aes = FALSE, shape = 17, size = 3, aes(color = "Stations")) +
+  scale_color_manual(name = "Map Features", values = c("Stations" = "black"), labels = c("Stations")) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  theme(
+    axis.line = element_blank(),
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  annotation_north_arrow(location = "topleft")
+
+# Print the plot
+print(sta_map)
+```
+
+```{r map_stations}
+##### Stations #####
+
+sta_map <- ggmap(mad_map_cams) +
+  geom_sf(data = sta.wgs, inherit.aes = FALSE, shape = 17, size = 3, aes(color = "Stations")) +
+  scale_color_manual(name = "Map Features", values = c("Stations" = "black"), labels = c("Camera Stations")) +
+  annotation_scale(location = "bl", width_hint = 0.3) +
+  theme(
+    axis.line = element_blank(),
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  annotation_north_arrow(location = "topleft")
+
+print(sta_map)
+
+sta_map_inset <- ggdraw() +
+  draw_plot(sta_map, x = 0, y = 0) +
+  draw_plot(inset, x = 0.05, y = 0.15, width = 0.22, height = 0.22)
+
+ggsave(sta_map_inset,
+  filename = paste0("figures/", proj_name, "/Station_Map.png"),
+  height = 6, width = 8, dpi = 300
+)
+
+print(sta_map_inset)
+```
+
+
+```{r map_detections_looped}
+# Detection Maps Looped
+
+##### Detection maps #####
+
+# need to standarize by effort:
+
+eff <- read.csv(paste0("processed_data/", proj_name, "/", proj_name, "_daily_effort_lookup.csv")) %>%
+  rename(station_id = Deployment.Location.ID) %>%
+  group_by(station_id) %>%
+  summarise(effort = n())
+
+#######################################################################
+
+detect <- read.csv(paste0("processed_data/", proj_name, "/", proj_name, "_", independent, "min_Independent.csv")) %>%
+  rename(station_id = Deployment.Location.ID)
+
+# code to determine the 7 most commonly detected species of your project
+
+# Remove any species you are not interested in mapping
+species_to_remove <- c("Canis familiaris", "Unknown species", "Bird spp.")
+
+sp_vec <- detect %>%
+  group_by(station_id, Species) %>%
+  dplyr::summarise(detections = n()) %>%
+  left_join(eff) %>%
+  mutate(detections_year = detections / effort * 365) %>%
+  group_by(Species) %>%
+  dplyr::summarise(detections_year = n()) %>%
+  arrange(desc(detections_year)) %>%
+  filter(!Species %in% intersect(Species, species_to_remove)) %>%
+  slice(1:7) %>%
+  pull(Species)
+
+# Manually set the sp.vec if you would like
+# sp.vec<-c("Canis latrans", "Homo sapiens" etc)
+
+
+# Detection Maps loop
+Alpha <- c("a)", "b)", "c)", "d)", "e)", "f)", "g)", "h)", "i)", "j)", "k)", "l)", "m)", "n)", "o)", "p)", "q)", "r)")
+p <- list()
+gg_p <- list()
+
+
+for (i in 1:length(sp_vec)) {
+  detect_filtered <- detect %>%
+    filter(Species %in% c(sp_vec[i]))
+
+  detect_sta_summary <- detect_filtered %>%
+    group_by(station_id, Species) %>%
+    dplyr::summarise(detections = n()) %>%
+    left_join(eff) %>%
+    mutate(detections_year = detections / effort * 365)
+
+  sta_detect <- left_join(sta.wgs, detect_sta_summary, keep = F) %>%
+    dplyr::arrange("station_id") %>%
+    filter(!is.na(detections))
+
+  mad_map_detect <- get_googlemap(
+    center = c(mlong, mlat), zoom = 12, size = c(640, 640),
+    scale = 2,
+    maptype = "roadmap",
+    style = style
+  )
+
+  p[[i]] <- ggmap(mad_map_detect) +
+    geom_sf(
+      data = sta.wgs, inherit.aes = F,
+      shape = 17, size = 2
+    ) +
+    geom_sf(
+      data = sta_detect, inherit.aes = F,
+      aes(
+        size = detections_year
+      ), alpha = 0.7,
+      na.rm = T
+    ) +
+    labs(size = "Independent\ndetections\nper year") +
+    annotation_scale(location = "bl", width_hint = 0.3, alpha = 0.1) +
+    theme(
+      axis.line = element_blank(),
+      axis.text = element_blank(),
+      axis.title = element_blank(),
+      axis.ticks = element_blank(),
+      legend.text = element_text(size = 9),
+      legend.title = element_text(size = 10),
+      aspect.ratio = 1.1
+    ) +
+    guides(colour = guide_legend(override.aes = list(size = 3))) +
+    ggtitle(paste0(Alpha[[i]], " ", sp_vec[i]))
+
+  ggsave(p[[i]], filename = paste0("figures/", proj_name, "/", sp_vec[i], "_Detection_map.png"), height = 5, width = 5, dpi = 300)
+}
+
+############################################################################### To plot title
+title <- ggdraw() +
+  draw_label(
+    "Species\nDetection\nMaps",
+    fontface = "bold",
+    x = 0.1,
+    hjust = 0, size = 28
+  ) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 6)
+  )
+################################################################################ Final Plot grid below
+
+plot_grid(title, plotlist = p, ncol = 2, align = "v")
+
+
+# Saves plots of specific size in assigned place
+ggsave(paste0("figures/", proj_name, "/Detection_Map_Common_Sp.png"), height = 10, width = 8, dpi = 300, unit = "in", bg = "white")
+```

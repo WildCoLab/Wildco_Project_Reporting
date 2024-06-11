@@ -1,0 +1,159 @@
+---
+title: "Wildco_Project_Reporting"
+author: "Liam Brennan"
+date: "2024-05-08"
+output: 
+  word_document:
+    reference_docx: "template.docx"
+params:
+  project: NULL
+  independence_threshold: NULL
+  project_title: NULL
+  date_range: NULL
+  tz: NULL
+  category: NULL
+  colour: NULL 
+  ind_sex_age_output: NULL
+  plot_without_humans: NULL
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, dev = "png")
+```
+
+```{r reporting_packages_prep, results = FALSE}
+# Prepared by Liam Brennan
+# Last updated: June 2024
+
+# Load Packages
+list.of.packages <- c("knitr", "rmarkdown", "tidyverse")
+
+# Check you have them and load them
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
+if (length(new.packages)) install.packages(new.packages)
+lapply(list.of.packages, require, character.only = TRUE)
+
+
+# Setting Parameters to be run through the other markdown files in the project
+################################################################################
+proj_name <- params$project
+threshold <- params$independence_threshold
+project_title <- params$project_title
+date_range <- params$date_range
+################################################################################
+```
+
+```{r reporting_folder_creation, warning=FALSE}
+dir.create("processed_data/")
+dir.create(paste0("processed_data/", proj_name))
+dir.create("html_files")
+dir.create(paste0("html_files/", proj_name))
+dir.create("figures")
+dir.create(paste0("figures/", proj_name))
+```
+
+```{r render_data_standardization, results = FALSE, echo = FALSE, output_vars = "none"}
+rmarkdown::render(
+  input = "Wildco_DB_to_Standardized.Rmd",
+  output_file = paste0("html_files/", proj_name, "/", proj_name, "_Wildco_DB_to_Standardized.html"),
+  params = list(proj_name = proj_name),
+  envir = new.env()
+)
+```
+
+```{r render_effort, results = FALSE, echo = FALSE, output_vars = "none"}
+rmarkdown::render(
+  input = "Effort.Rmd",
+  output_file = paste0("html_files/", proj_name, "/", proj_name, "_Effort.html"),
+  params = list(proj_name = proj_name),
+  envir = new.env()
+)
+```
+
+```{r reporting_render_single_site, results = FALSE, echo = FALSE, output_vars = "none", fig.show = 'hide'}
+rmarkdown::render(
+  input = "Standardised_Data_Exploration_Single_Site.Rmd",
+  output_file = paste0("html_files/", proj_name, "/", proj_name, "_Standardised_Data_Exploration.html"),
+  params = list(
+    proj_name = proj_name,
+    threshold = threshold,
+    tz = tz,
+    category = category,
+    colour = colour,
+    ind_sex_age_output = ind_sex_age_output,
+    plot_without_humans = plot_without_humans
+  ),
+  envir = new.env()
+)
+```
+
+```{r reporting_render_maps, results = FALSE, echo = FALSE, output_vars = "none"}
+rmarkdown::render(
+  input = "Maps.Rmd",
+  output_file = paste0("html_files/", proj_name, "/", proj_name, "_Maps.html"),
+  params = list(proj_name = proj_name, threshold = threshold),
+  envir = new.env()
+)
+```
+# 1.0 Introduction
+```{r placeholder_1}
+```
+
+# 2.0 Methods
+```{r placeholder_2}
+```
+
+```{r reporting_print_sta_map, fig.width=8, fig.height=6, dpi=300, out.width='100%',fig.cap=paste0("Figure 1: Locations of wildlife camera stations at ",project_title,".")}
+knitr::include_graphics(paste0("figures/", proj_name, "/Station_Map.png"))
+```
+
+```{r reporting_species_table, results = FALSE, echo = FALSE, output_vars = "none"}
+rmarkdown::render(
+  input = "Common_Name_Detections_Table.Rmd",
+  output_file = paste0("html_files/", proj_name, "/", proj_name, "_Common_Name_Detections_Table.html"),
+  params = list(proj_name = proj_name),
+  envir = new.env()
+)
+```
+# 3.0 Results
+```{r reporting_table_print}
+comm_name_table <- read.csv(paste0("processed_data/", proj_name, "/", proj_name, "_Common_Name_Detection_Table.csv"))
+
+comm_name_table$X <- NULL
+colnames(comm_name_table) <- gsub(".", " ", colnames(comm_name_table), fixed = TRUE)
+
+# Print the formatted table
+kable(comm_name_table, format = "markdown", caption = "Table 1: Total detections of wildlife species.")
+```
+
+```{r reporting_render_time_series, results = FALSE, echo = FALSE, output_vars = "none"}
+rmarkdown::render(
+  input = "Time_Series.Rmd",
+  output_file = paste0("html_files/", proj_name, "/", proj_name, "_Time_Series.html"),
+  params = list(proj_name = proj_name, threshold = threshold),
+  envir = new.env()
+)
+```
+
+```{r reporting_print_time_series, fig.width= 8, fig.height=10, dpi=300, out.width='100%', fig.cap=paste0("Figure 2: Monthly detection rates (independent detections per 100 camera-days), determined with a ", threshold, "-minute independence threshold. Also, note different y axis scales across species.")}
+knitr::include_graphics(paste0("figures/", proj_name, "/Timeseries_Plot_Common_Sp.png"))
+```
+
+```{r reporting_print_detection_map, fig.width=8, fig.height=10, dpi=300, out.width='100%',fig.cap= paste0("Figure 3: Spatial distributions of ", threshold, "-minute independent camera trap detections from ", date_range ," for commonly detected wildlife species.")}
+knitr::include_graphics(paste0("figures/", proj_name, "/Detection_Map_Common_Sp.png"))
+```
+
+```{r placeholder_3}
+```
+# 4.0 Discussion
+```{r placeholder_4}
+```
+# 5.0 References 
+```{r placeholder_5}
+```
+
+# Appendix
+```{r _reporting_print_effort, fig.width=8, fig.height=8, dpi=300, out.width='100%', fig.cap = paste0("Figure A1: Operational periods of wildlife cameras at ", project_title,". Camera traps were confirmed to be operational during periods indicated by green and yellow bars, but were otherwise covered in snow (blue) or inactive during periods without colour (due to damage of malfunction)." )}
+knitr::include_graphics(paste0("figures/", proj_name, "/Effort_Plot.png"))
+```
